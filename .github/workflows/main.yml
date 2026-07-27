@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       crd_code:
-        description: 'Chrome Remote Desktop PowerShell Command'
+        description: 'Chrome Remote Desktop Code or Command'
         required: true
       pin:
         description: '6-digit PIN'
@@ -27,7 +27,19 @@ jobs:
       - name: Start Remote Desktop Host
         run: |
           Write-Host "Registering Windows Host with Google..."
-          ${{ github.event.inputs.crd_code }} --pin=${{ github.event.inputs.pin }}
+          $rawInput = '${{ github.event.inputs.crd_code }}'
+          $pin = "${{ github.event.inputs.pin }}"
+          $hostExe = "$env:PROGRAMFILES\Google\Chrome Remote Desktop\CurrentVersion\remotedesktop_host.exe"
+
+          # Automatically extract code if embedded in a pasted command
+          if ($rawInput -match '4/[0-9a-zA-Z_-]+') {
+              $authCode = $Matches[0]
+              Write-Host "Found Auth Code: $authCode"
+              cmd /c """$hostExe"" --start --oauth-authcode=""$authCode"" --redirect-url=""https://remotedesktop.google.com/headless"" --pin=""$pin"""
+          } else {
+              $cleanCmd = $rawInput -replace '^\&\s*', ''
+              cmd /c "$cleanCmd --pin=$pin"
+          }
 
       - name: Keep Alive Loop
         run: |
