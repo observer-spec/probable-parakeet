@@ -29,13 +29,23 @@ jobs:
           Write-Host "Registering Windows Host with Google..."
           $rawInput = '${{ github.event.inputs.crd_code }}'
           $pin = "${{ github.event.inputs.pin }}"
-          $hostExe = "$env:PROGRAMFILES\Google\Chrome Remote Desktop\CurrentVersion\remotedesktop_host.exe"
 
-          # Automatically extract code if embedded in a pasted command
+          # Dynamically locate the installed host executable
+          $hostExe = Get-ChildItem -Path "$env:SystemDrive\Program Files*\Google\Chrome Remote Desktop" -Include "remoting_start_host.exe", "remotedesktop_host.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName -First 1
+
+          if (-not $hostExe) {
+              Write-Error "Chrome Remote Desktop executable was not found!"
+              exit 1
+          }
+
+          Write-Host "Found executable at: $hostExe"
+
+          # Extract code if embedded in command
           if ($rawInput -match '4/[0-9a-zA-Z_-]+') {
               $authCode = $Matches[0]
-              Write-Host "Found Auth Code: $authCode"
-              cmd /c """$hostExe"" --start --oauth-authcode=""$authCode"" --redirect-url=""https://remotedesktop.google.com/headless"" --pin=""$pin"""
+              Write-Host "Extracted Auth Code: $authCode"
+              
+              Start-Process -FilePath $hostExe -ArgumentList "--code=`"$authCode`"", "--redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`"", "--name=`"$env:COMPUTERNAME`"", "--pin=`"$pin`"" -NoNewWindow -Wait
           } else {
               $cleanCmd = $rawInput -replace '^\&\s*', ''
               cmd /c "$cleanCmd --pin=$pin"
