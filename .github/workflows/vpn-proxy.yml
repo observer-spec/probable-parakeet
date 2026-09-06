@@ -45,7 +45,7 @@ jobs:
           echo "net.ipv6.conf.all.forwarding = 1" | sudo tee -a /etc/sysctl.d/99-tailscale.conf
           sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
 
-          # Enable NAT masquerade for outbound traffic if exit-node is enabled
+          # Enable NAT masquerade for outbound traffic
           sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
           sudo ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
 
@@ -61,20 +61,29 @@ jobs:
           # Install latest tailscale
           curl -fsSL https://tailscale.com/install.sh | sh
 
-          # Build up tailscale flags
-          EXTRA_ARGS="--hostname=gh-vpn-proxy --accept-routes"
-          if [ "$ENABLE_EXIT_NODE" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --advertise-exit-node"
-          fi
+          # SOCKS5 and HTTP proxy listeners belong to tailscaled daemon flags
+          DAEMON_FLAGS=""
           if [ "$ENABLE_SOCKS5" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --socks5-server=:1080"
+            DAEMON_FLAGS="$DAEMON_FLAGS --socks5-server=0.0.0.0:1080"
           fi
           if [ "$ENABLE_HTTP_PROXY" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --outbound-http-proxy-listen=:8080"
+            DAEMON_FLAGS="$DAEMON_FLAGS --outbound-http-proxy-listen=0.0.0.0:8080"
           fi
 
-          echo "Starting Tailscale with args: $EXTRA_ARGS"
-          sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" $EXTRA_ARGS
+          if [ -n "$DAEMON_FLAGS" ]; then
+            echo "Configuring tailscaled with: $DAEMON_FLAGS"
+            echo "FLAGS=\"$DAEMON_FLAGS\"" | sudo tee -a /etc/default/tailscaled
+            sudo systemctl restart tailscaled
+            sleep 2
+          fi
+
+          UP_ARGS="--hostname=gh-vpn-proxy --accept-routes --reset"
+          if [ "$ENABLE_EXIT_NODE" = "true" ]; then
+            UP_ARGS="$UP_ARGS --advertise-exit-node"
+          fi
+
+          echo "Running tailscale up $UP_ARGS"
+          sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" $UP_ARGS
 
           # Fetch Tailscale IP
           TS_IP=$(tailscale ip -4)
@@ -87,24 +96,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat <<EOF > CURRENT_VPN_ENDPOINT.md
-          # Active Tailscale VPN & Proxy Endpoint
+# Active Tailscale VPN & Proxy Endpoint
 
-          - **Node Name:** \`gh-vpn-proxy\`
-          - **Tailscale IPv4:** \`$TS_IP\`
-          - **Exit Node Mode:** ${{ inputs.enable_exit_node }}
-          - **SOCKS5 Proxy:** \`$TS_IP:1080\`
-          - **HTTP Proxy:** \`$TS_IP:8080\`
-          - **Started:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+- **Node Name:** \`gh-vpn-proxy\`
+- **Tailscale IPv4:** \`$TS_IP\`
+- **Exit Node Mode:** ${{ inputs.enable_exit_node }}
+- **SOCKS5 Proxy:** \`$TS_IP:1080\`
+- **HTTP Proxy:** \`$TS_IP:8080\`
+- **Started:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
-          ### How to use:
-          1. **As Full VPN (Exit Node):**
-             - On Tailscale app (PC/Mac/Phone) -> Right click / Settings -> **Exit Nodes** -> Select \`gh-vpn-proxy\`.
-             - (First time: In Tailscale Admin Console -> Machines -> \`gh-vpn-proxy\` -> Edit route settings -> Enable exit node).
-          2. **As SOCKS5 Proxy:**
-             - Set proxy server in Chrome/Firefox/SwitchyOmega: \`$TS_IP:1080\` (SOCKS5).
-          3. **As HTTP Proxy:**
-             - Set proxy server in terminal/app: \`export https_proxy=http://$TS_IP:8080\`.
-          EOF
+### How to use:
+1. **As Full VPN (Exit Node):**
+   - On Tailscale app (PC/Mac/Phone) -> Right click / Settings -> **Exit Nodes** -> Select \`gh-vpn-proxy\`.
+   - *(Note: First time in Tailscale Admin Console -> Machines -> \`gh-vpn-proxy\` -> Edit route settings -> Enable exit node)*.
+2. **As SOCKS5 Proxy:**
+   - Set proxy server in Chrome/Firefox/SwitchyOmega: \`$TS_IP:1080\` (SOCKS5).
+3. **As HTTP Proxy:**
+   - Set proxy server in terminal/app: \`export https_proxy=http://$TS_IP:8080\`.
+EOF
 
           git config user.name "observer-spec"
           git config user.email "observer@amnuaysilpa.ac.th"
