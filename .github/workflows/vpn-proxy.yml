@@ -1,0 +1,121 @@
+name: Tailscale VPN & Proxy
+
+concurrency:
+  group: vpn-proxy-singleton
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: 'Runtime duration in hours (1-6)'
+        required: false
+        default: '6'
+      enable_exit_node:
+        description: 'Advertise as Tailscale Exit Node (Full VPN routing)'
+        type: boolean
+        required: false
+        default: true
+      enable_socks5:
+        description: 'Enable SOCKS5 proxy on port 1080'
+        type: boolean
+        required: false
+        default: true
+      enable_http_proxy:
+        description: 'Enable HTTP proxy on port 8080'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  vpn-proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure Linux Kernel Networking
+        run: |
+          echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+          echo "net.ipv6.conf.all.forwarding = 1" | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+          sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+
+          # Enable NAT masquerade for outbound traffic if exit-node is enabled
+          sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+          sudo ip6tables -t nat -A POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+
+      - name: Tailscale Connect & Proxy Init
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          ENABLE_EXIT_NODE: ${{ inputs.enable_exit_node }}
+          ENABLE_SOCKS5: ${{ inputs.enable_socks5 }}
+          ENABLE_HTTP_PROXY: ${{ inputs.enable_http_proxy }}
+        run: |
+          test -n "$TAILSCALE_AUTHKEY" || { echo "::error::TAILSCALE_AUTHKEY secret is empty"; exit 1; }
+
+          # Install latest tailscale
+          curl -fsSL https://tailscale.com/install.sh | sh
+
+          # Build up tailscale flags
+          EXTRA_ARGS="--hostname=gh-vpn-proxy --accept-routes"
+          if [ "$ENABLE_EXIT_NODE" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --advertise-exit-node"
+          fi
+          if [ "$ENABLE_SOCKS5" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --socks5-server=:1080"
+          fi
+          if [ "$ENABLE_HTTP_PROXY" = "true" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS --outbound-http-proxy-listen=:8080"
+          fi
+
+          echo "Starting Tailscale with args: $EXTRA_ARGS"
+          sudo tailscale up --authkey="$TAILSCALE_AUTHKEY" $EXTRA_ARGS
+
+          # Fetch Tailscale IP
+          TS_IP=$(tailscale ip -4)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "Tailscale Node IP: $TS_IP"
+
+      - name: Publish Live Endpoint Docs
+        env:
+          TS_IP: ${{ env.TAILSCALE_IP }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat <<EOF > CURRENT_VPN_ENDPOINT.md
+          # Active Tailscale VPN & Proxy Endpoint
+
+          - **Node Name:** \`gh-vpn-proxy\`
+          - **Tailscale IPv4:** \`$TS_IP\`
+          - **Exit Node Mode:** ${{ inputs.enable_exit_node }}
+          - **SOCKS5 Proxy:** \`$TS_IP:1080\`
+          - **HTTP Proxy:** \`$TS_IP:8080\`
+          - **Started:** $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+
+          ### How to use:
+          1. **As Full VPN (Exit Node):**
+             - On Tailscale app (PC/Mac/Phone) -> Right click / Settings -> **Exit Nodes** -> Select \`gh-vpn-proxy\`.
+             - (First time: In Tailscale Admin Console -> Machines -> \`gh-vpn-proxy\` -> Edit route settings -> Enable exit node).
+          2. **As SOCKS5 Proxy:**
+             - Set proxy server in Chrome/Firefox/SwitchyOmega: \`$TS_IP:1080\` (SOCKS5).
+          3. **As HTTP Proxy:**
+             - Set proxy server in terminal/app: \`export https_proxy=http://$TS_IP:8080\`.
+          EOF
+
+          git config user.name "observer-spec"
+          git config user.email "observer@amnuaysilpa.ac.th"
+          git add CURRENT_VPN_ENDPOINT.md
+          git diff --staged --quiet || (git commit -m "docs: publish active Tailscale VPN endpoint [skip ci]" && git push origin main)
+
+          cat CURRENT_VPN_ENDPOINT.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Keep Tunnel Alive
+        run: |
+          HOURS=${{ inputs.duration_hours }}
+          SECONDS=$(( HOURS * 3600 ))
+          echo "Keeping VPN Proxy alive for $HOURS hours ($SECONDS seconds)..."
+          sleep $SECONDS
