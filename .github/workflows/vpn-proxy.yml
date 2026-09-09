@@ -1,15 +1,18 @@
 name: Tailscale VPN & Proxy
 
+# Rolling handoff: NO concurrency cap on purpose. A new run starts every 5h,
+# verifies its own Tailscale node is healthy, then cancels the older run.
+# Steady state is 1 runner; 2 overlap only during the ~3 min handoff window.
 concurrency:
-  group: vpn-proxy-singleton
-  cancel-in-progress: true
+  group: vpn-proxy-rolling
+  cancel-in-progress: false
 
 on:
   schedule:
-    # Runs every 11 hours (shifted by 5h 30m) to achieve a 5.5 hour cadence:
-    # 00:00, 05:30, 11:00, 16:30, 22:00 UTC
-    - cron: '0 0,11,22 * * *'
-    - cron: '30 5,16 * * *'
+    # Every 5 hours. Runtime (sleep) is also 5h so the next run starts
+    # ~when the current one's time is up -> ~30 min safety overlap
+    # is NOT needed; boot+setup (~3 min) is the only overlap.
+    - cron: '0 */5 * * *'
   workflow_dispatch:
     inputs:
       duration_hours:
@@ -34,6 +37,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # needed for the handoff step to cancel the older run
 
 jobs:
   vpn-proxy:
@@ -103,9 +107,35 @@ jobs:
 
           cat CURRENT_VPN_ENDPOINT.md >> $GITHUB_STEP_SUMMARY
 
+      - name: Verify New Node & Hand Off (cancel older run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 1. Health check: our own node must be up, have an IPv4,
+          #    answer control-plane pings, and advertise itself as exit node.
+          TS_IP=$(tailscale ip -4)
+          test -n "$TS_IP" || { echo "::error::no Tailscale IPv4"; exit 1; }
+          tailscale ping --c=3 100.100.100.100 || { echo "::error::control-plane ping failed"; exit 1; }
+          tailscale exit-node list | grep -q 'gh-vpn-proxy' || { echo "::error::not advertising as exit node"; exit 1; }
+          echo "New node healthy: $TS_IP"
+
+          # 2. Give clients ~60s to discover the new node before killing the old one.
+          sleep 60
+
+          # 3. Cancel any OLDER in-progress run of this same workflow.
+          #    (Only databaseIds smaller than ours -> never suicide, never kill newer.)
+          RUN_ID="${{ github.run_id }}"
+          gh run list --workflow vpn-proxy.yml --status in_progress --limit 10 \
+            --json databaseId -q '.[].databaseId' | while read -r OLD_ID; do
+            if [ "$OLD_ID" -lt "$RUN_ID" ]; then
+              echo "Handing off: cancelling older run $OLD_ID"
+              gh api "repos/${{ github.repository }}/actions/runs/$OLD_ID/cancel" -X POST
+            fi
+          done
+
       - name: Keep Tunnel Alive
         run: |
-          HOURS=${{ github.event_name == 'workflow_dispatch' && inputs.duration_hours || '5.5' }}
+          HOURS=${{ github.event_name == 'workflow_dispatch' && inputs.duration_hours || '5' }}
           SECONDS=$(awk "BEGIN {print int($HOURS * 3600)}")
           echo "Keeping VPN Proxy alive for $HOURS hours ($SECONDS seconds)..."
           sleep $SECONDS
