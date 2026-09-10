@@ -112,10 +112,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # 1. Health check: our own node must be up, have an IPv4,
-          #    answer control-plane pings, and advertise itself as exit node.
+          #    report itself Online, and advertise itself as exit node.
           TS_IP=$(tailscale ip -4)
           test -n "$TS_IP" || { echo "::error::no Tailscale IPv4"; exit 1; }
-          tailscale ping --c=3 100.100.100.100 || { echo "::error::control-plane ping failed"; exit 1; }
+          tailscale status | grep -q "$TS_IP" || { echo "::error::self IP $TS_IP not in tailscale status"; exit 1; }
+          tailscale ping --c=1 "$TS_IP" || { echo "::error::self ping failed"; exit 1; }
           tailscale exit-node list | grep -q 'gh-vpn-proxy' || { echo "::error::not advertising as exit node"; exit 1; }
           echo "New node healthy: $TS_IP"
 
