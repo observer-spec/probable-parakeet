@@ -111,13 +111,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # 1. Health check: our own node must be up, have an IPv4,
-          #    report itself Online, and advertise itself as exit node.
+          # 1. Health check: our own node must be up and have an IPv4.
+          #    Exit-node offer is warn-only: it needs admin approval in the
+          #    Tailscale console, and `exit-node list` never shows self.
           TS_IP=$(tailscale ip -4)
           test -n "$TS_IP" || { echo "::error::no Tailscale IPv4"; exit 1; }
           tailscale status | grep -q "$TS_IP" || { echo "::error::self IP $TS_IP not in tailscale status"; exit 1; }
           tailscale ping --c=1 "$TS_IP" || { echo "::error::self ping failed"; exit 1; }
-          tailscale exit-node list | grep -q 'gh-vpn-proxy' || { echo "::error::not advertising as exit node"; exit 1; }
+          tailscale exit-node list | grep -q 'gh-vpn-proxy' && echo "exit node visible" || echo "::warning::gh-vpn-proxy not in exit-node list (approve it in Tailscale admin if exit routing needed)"
           echo "New node healthy: $TS_IP"
 
           # 2. Give clients ~60s to discover the new node before killing the old one.
