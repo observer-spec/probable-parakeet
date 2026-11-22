@@ -1,16 +1,16 @@
 # Active Tailscale VPN & Proxy Endpoint
 
 - **Node Name:** `gh-vpn-proxy`
-- **Tailscale IPv4:** `100.100.125.15`
+- **Tailscale IPv4:** `100.90.232.90`
 - **Exit Node Mode:** 
-- **SOCKS5 Proxy:** `100.100.125.15:1080`
-- **HTTP Proxy:** `100.100.125.15:8080`
-- **Started:** 2026-11-22 00:07:58 UTC
+- **SOCKS5 Proxy:** `100.90.232.90:1080`
+- **HTTP Proxy:** `100.90.232.90:8080`
+- **Started:** 2026-11-22 13:06:40 UTC
 
 ### How to use:
 1. **As Full VPN (Exit Node):**
    - On Tailscale app -> Exit Nodes -> Select `gh-vpn-proxy`.
 2. **As SOCKS5 Proxy:**
-   - SOCKS5: `100.100.125.15:1080`
+   - SOCKS5: `100.90.232.90:1080`
 3. **As HTTP Proxy:**
-   - HTTP: `100.100.125.15:8080`
+   - HTTP: `100.90.232.90:8080`
